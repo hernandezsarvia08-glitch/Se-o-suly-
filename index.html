@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Robot Maze: Visión Clara</title>
+    <style>
+        body { background: #111; color: #fff; font-family: sans-serif; margin: 0; overflow: hidden; display: flex; flex-direction: column; align-items: center; }
+        /* Bordes simples para distinguir áreas */
+        canvas { width: 100vw; height: 50vh; background: #000; border-bottom: 5px solid #00f2ff; }
+        .hud { position: absolute; top: 10px; width: 90%; display: flex; justify-content: space-between; background: #222; padding: 10px; border: 2px solid #fff; border-radius: 8px; }
+        .controls { display: grid; grid-template-columns: repeat(3, 80px); gap: 15px; margin-top: 25px; }
+        .btn { width: 80px; height: 80px; background: #333; border: 2px solid #fff; border-radius: 15px; color: #fff; font-size: 30px; display: flex; align-items: center; justify-content: center; user-select: none; }
+        .btn:active { background: #00f2ff; color: #000; }
+        #lvlInfo { position: absolute; top: 65px; right: 20px; font-weight: bold; color: #ffff00; }
+    </style>
+</head>
+<body>
+
+    <canvas id="render"></canvas>
+    <div id="lvlInfo">NIVEL: 1 / 5</div>
+
+    <div class="hud">
+        <span>🤖 VISTA SIMPLE</span>
+        <span>⏱️ <span id="timer">0.00</span>s</span>
+    </div>
+
+    <div class="controls">
+        <div></div> <div class="btn" id="up">▲</div> <div></div>
+        <div class="btn" id="left">◀</div> <div class="btn" id="down">▼</div> <div class="btn" id="right">▶</div>
+    </div>
+
+<script>
+    const canvas = document.getElementById('render');
+    const ctx = canvas.getContext('2d');
+    const timerDisplay = document.getElementById('timer');
+    const lvlDisplay = document.getElementById('lvlInfo');
+
+    let world = [];
+    let p = { x: 1.5, y: 1.5, dir: 0, v: 0, rv: 0 };
+    let globalStartTime = Date.now();
+    let currentLevel = 1;
+    let rivals = [];
+
+    function generateMaze(size) {
+        let maze = Array(size).fill().map(() => Array(size).fill(1));
+        function carve(x, y) {
+            maze[y][x] = 0;
+            let dirs = [[0,2],[0,-2],[2,0],[-2,0]].sort(() => Math.random() - 0.5);
+            dirs.forEach(([dx, dy]) => {
+                let nx = x + dx, ny = y + dy;
+                if (ny > 0 && ny < size-1 && nx > 0 && nx < size-1 && maze[ny][nx] === 1) {
+                    maze[y+dy/2][x+dx/2] = 0; carve(nx, ny);
+                }
+            });
+        }
+        carve(1, 1);
+        maze[size-2][size-2] = 2;
+        return maze;
+    }
+
+    function initLevel() {
+        if (currentLevel > 5) { alert("¡GANASTE TODO!"); currentLevel = 1; globalStartTime = Date.now(); }
+        let size = 9 + (currentLevel * 2);
+        world = generateMaze(size);
+        p = { x: 1.5, y: 1.5, dir: 0, v: 0, rv: 0 };
+        lvlDisplay.innerText = `NIVEL: ${currentLevel} / 5`;
+        
+        rivals = []; // Robots más lentos y pequeños
+        for(let i=0; i < currentLevel; i++) {
+            rivals.push({ x: size-2.5, y: size-2.5, dx: 0.02, dy: 0.02, col: "#ff00ff" });
+        }
+    }
+
+    function loop() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight * 0.5;
+
+        // Movimiento Rivales
+        rivals.forEach(r => {
+            let nx = r.x + r.dx, ny = r.y + r.dy;
+            if (world[Math.floor(ny)][Math.floor(nx)] === 0) { r.x = nx; r.y = ny; }
+            else { r.dx *= -1; r.dy *= -1; }
+            if (Math.sqrt((p.x - r.x)**2 + (p.y - r.y)**2) < 0.2) { p.x=1.5; p.y=1.5; }
+        });
+
+        // Movimiento Jugador
+        let nx = p.x + Math.cos(p.dir)*p.v, ny = p.y + Math.sin(p.dir)*p.v;
+        let cell = world[Math.floor(ny)][Math.floor(nx)];
+        if (cell === 1) { p.x=1.5; p.y=1.5; } // Pared reinicia posición
+        else if (cell === 2) { currentLevel++; initLevel(); }
+        else { p.x = nx; p.y = ny; }
+
+        p.dir += p.rv; p.v *= 0.8; p.rv *= 0.7;
+
+        // Renderizado Sencillo (Sin sombras para ver mejor)
+        ctx.fillStyle = "#333"; ctx.fillRect(0,0,canvas.width,canvas.height/2); // Techo gris
+        ctx.fillStyle = "#666"; ctx.fillRect(0,canvas.height/2,canvas.width,canvas.height/2); // Suelo gris claro
+
+        const rays = 80, fov = 1.1;
+        const w = canvas.width / rays;
+
+        for(let i=0; i<rays; i++) {
+            let angle = (p.dir - fov/2) + (i/rays) * fov;
+            let d = 0, hit = 0, rCol = "";
+            while(d < 12) {
+                d += 0.08;
+                let tx = Math.floor(p.x + Math.cos(angle)*d), ty = Math.floor(p.y + Math.sin(angle)*d);
+                let fR = false;
+                rivals.forEach(r => {
+                    if(Math.sqrt((p.x+Math.cos(angle)*d-r.x)**2+(p.y+Math.sin(angle)*d-r.y)**2)<0.1) {
+                        hit=4; rCol=r.col; fR=true;
+                    }
+                });
+                if(fR || world[ty][tx] > 0) { if(!fR) hit = world[ty][tx]; break; }
+            }
+
+            let h = canvas.height / (d * Math.cos(angle - p.dir));
+            let yStart = (canvas.height - h) / 2;
+
+            if(hit === 1) ctx.fillStyle = "#0055ff"; // Paredes azul sólido
+            else if(hit === 2) ctx.fillStyle = "#00ff00"; // Meta verde sólido
+            else if(hit === 4) ctx.fillStyle = "#ff00ff"; // Rivales rosa sólido
+            
+            if(hit > 0) ctx.fillRect(i*w, yStart, w+1, h);
+        }
+
+        timerDisplay.innerText = ((Date.now() - globalStartTime) / 1000).toFixed(2);
+        requestAnimationFrame(loop);
+    }
+
+    const setup = (id, v, rv) => {
+        const e = document.getElementById(id);
+        const act = (ev) => { ev.preventDefault(); p.v = v; p.rv = rv; };
+        e.ontouchstart = act; e.onmousedown = act;
+    };
+    setup('up', 0.1, 0); setup('down', -0.08, 0); setup('left', 0, -0.08); setup('right', 0, 0.08);
+    
+    initLevel(); loop();
+</script>
+</body>
+</html>
